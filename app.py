@@ -162,6 +162,10 @@ def main():
         team_seed_map = {r["name"]: int(r["seed"]) for _, r in teams_df.iterrows()}
         team_conf_map = {r["name"]: r["conference"] for _, r in teams_df.iterrows()}
 
+        def seed_label(name):
+            s = team_seed_map[name]
+            return str(s) if s > 0 else "NR"
+
         col1, col2 = st.columns(2)
         with col1:
             team_a = st.selectbox("Team A", team_list, index=0)
@@ -184,7 +188,7 @@ def main():
             col1, col2, col3 = st.columns([2, 1, 2])
             with col1:
                 st.metric(
-                    f"({team_seed_map[team_a]}) {team_a}",
+                    f"({seed_label(team_a)}) {team_a}",
                     f"{prob:.1%}",
                     delta=f"{team_conf_map[team_a]}",
                 )
@@ -192,13 +196,13 @@ def main():
                 st.markdown("<h2 style='text-align: center;'>vs</h2>", unsafe_allow_html=True)
             with col3:
                 st.metric(
-                    f"({team_seed_map[team_b]}) {team_b}",
+                    f"({seed_label(team_b)}) {team_b}",
                     f"{1-prob:.1%}",
                     delta=f"{team_conf_map[team_b]}",
                 )
 
             st.markdown("---")
-            st.subheader(f"Predicted Winner: ({team_seed_map[winner]}) {winner}")
+            st.subheader(f"Predicted Winner: ({seed_label(winner)}) {winner}")
             st.progress(confidence, text=f"Confidence: {confidence:.1%}")
 
     elif page == "Bracket Prediction":

@@ -36,7 +36,7 @@ def build_graph(teams: pd.DataFrame, games: pd.DataFrame) -> HeteroData:
     data = HeteroData()
 
     # --- Team node features ---
-    feature_cols = ["wins", "losses", "ppg", "opp_ppg", "off_efficiency", "def_efficiency", "sos", "seed"]
+    feature_cols = ["wins", "losses", "ppg", "opp_ppg", "off_efficiency", "def_efficiency", "sos", "net_rating"]
     team_features = teams[feature_cols].values.astype(np.float32)
 
     # Normalize each feature to [0, 1]
