@@ -31,6 +31,7 @@ def build_graph(teams: pd.DataFrame, games: pd.DataFrame) -> HeteroData:
         - (team, belongs_to, conference)
         - (conference, has_team, team)
         - (team, defeated, team): directed, with weight and avg_margin attributes
+        - (team, played, team): bidirectional, for all teams that faced each other
     """
     data = HeteroData()
 
@@ -61,7 +62,6 @@ def build_graph(teams: pd.DataFrame, games: pd.DataFrame) -> HeteroData:
         conf_features.append([avg_wins, num_tourney, avg_sos])
 
     conf_features = np.array(conf_features, dtype=np.float32)
-    # Normalize
     cmins = conf_features.min(axis=0)
     cmaxs = conf_features.max(axis=0)
     cranges = cmaxs - cmins
@@ -85,21 +85,29 @@ def build_graph(teams: pd.DataFrame, games: pd.DataFrame) -> HeteroData:
         [team_to_conf_dst, team_to_conf_src], dtype=torch.long
     )
 
-    # --- Defeated edges (directed, aggregated) ---
-    # For each (winner, loser) pair, count wins and average margin
+    # --- Aggregate game stats per team pair ---
+    # Track both defeated stats and played stats
     defeat_stats = defaultdict(lambda: {"count": 0, "total_margin": 0.0})
+    played_stats = defaultdict(lambda: {"num_games": 0, "total_diff": 0.0})
+
     for _, row in games.iterrows():
         a, b = int(row["team_a_id"]), int(row["team_b_id"])
         sa, sb = row["score_a"], row["score_b"]
-        if sa > sb:
-            key = (a, b)
-            defeat_stats[key]["count"] += 1
-            defeat_stats[key]["total_margin"] += sa - sb
-        elif sb > sa:
-            key = (b, a)
-            defeat_stats[key]["count"] += 1
-            defeat_stats[key]["total_margin"] += sb - sa
 
+        # Played edges: bidirectional, track from both perspectives
+        pair = (min(a, b), max(a, b))
+        played_stats[pair]["num_games"] += 1
+
+        if sa > sb:
+            defeat_stats[(a, b)]["count"] += 1
+            defeat_stats[(a, b)]["total_margin"] += sa - sb
+            played_stats[pair]["total_diff"] += (sa - sb) if a == pair[0] else -(sa - sb)
+        elif sb > sa:
+            defeat_stats[(b, a)]["count"] += 1
+            defeat_stats[(b, a)]["total_margin"] += sb - sa
+            played_stats[pair]["total_diff"] += (sa - sb) if a == pair[0] else -(sa - sb)
+
+    # --- Defeated edges (directed) ---
     if defeat_stats:
         src, dst, weights, margins = [], [], [], []
         for (w, l), stats in defeat_stats.items():
@@ -115,9 +123,37 @@ def build_graph(teams: pd.DataFrame, games: pd.DataFrame) -> HeteroData:
             list(zip(weights, margins)), dtype=torch.float
         )
     else:
-        # Empty defeated edges
         data["team", "defeated", "team"].edge_index = torch.zeros((2, 0), dtype=torch.long)
         data["team", "defeated", "team"].edge_attr = torch.zeros((0, 2), dtype=torch.float)
+
+    # --- Played edges (bidirectional) ---
+    # Every pair of teams that played each other gets edges in both directions.
+    # This ensures signal can flow even from losers to winners.
+    if played_stats:
+        played_src, played_dst, played_attr = [], [], []
+        for (a, b), stats in played_stats.items():
+            num_games = stats["num_games"]
+            avg_diff = stats["total_diff"] / num_games  # positive if a scored more overall
+
+            # Edge a -> b: features = [num_games, avg_score_diff from a's perspective]
+            played_src.append(a)
+            played_dst.append(b)
+            played_attr.append([num_games, avg_diff])
+
+            # Edge b -> a: features = [num_games, avg_score_diff from b's perspective]
+            played_src.append(b)
+            played_dst.append(a)
+            played_attr.append([num_games, -avg_diff])
+
+        data["team", "played", "team"].edge_index = torch.tensor(
+            [played_src, played_dst], dtype=torch.long
+        )
+        data["team", "played", "team"].edge_attr = torch.tensor(
+            played_attr, dtype=torch.float
+        )
+    else:
+        data["team", "played", "team"].edge_index = torch.zeros((2, 0), dtype=torch.long)
+        data["team", "played", "team"].edge_attr = torch.zeros((0, 2), dtype=torch.float)
 
     return data
 
@@ -136,7 +172,6 @@ def build_training_pairs(games: pd.DataFrame):
             a_ids.append(a)
             b_ids.append(b)
             labels.append(1.0)
-            # Also add the reverse as a negative example
             a_ids.append(b)
             b_ids.append(a)
             labels.append(0.0)
